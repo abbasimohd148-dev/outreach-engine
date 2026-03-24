@@ -1,5 +1,7 @@
 fastapi
-uvicorn
+uvicorn[standard]
 asyncpg
 python-multipart
 pydantic
+httpx
+email-validator
