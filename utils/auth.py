@@ -1,0 +1,4 @@
+async def get_current_user():
+    return {
+        "id": "11111111-1111-1111-1111-111111111111"
+    }
