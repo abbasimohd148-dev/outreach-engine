@@ -1,7 +1,8 @@
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional
 import uuid
 import csv
 import io
@@ -14,6 +15,7 @@ from utils.auth import get_current_user
 
 app = FastAPI(title="Outreach Engine API", version="1.0.0")
 
+# ✅ CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,6 +23,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ✅ ROOT REDIRECT TO DOCS
+@app.get("/")
+def root():
+    return RedirectResponse(url="/docs")
+
 
 # ─────────────────────────────
 # CAMPAIGN CREATE
