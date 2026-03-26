@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
-from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from typing import Optional
 import uuid
@@ -11,11 +11,15 @@ from services.enrichment import EnrichmentService
 from services.generation import GenerationService
 from services.email_sender import EmailSender
 from utils.db import get_db, Database
-from utils.auth import get_current_user
 
 app = FastAPI(title="Outreach Engine API", version="1.0.0")
 
-# ✅ CORS
+# Root → Docs redirect
+@app.get("/")
+def root():
+    return RedirectResponse(url="/docs")
+
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,12 +27,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# ✅ ROOT REDIRECT TO DOCS
-@app.get("/")
-def root():
-    return RedirectResponse(url="/docs")
-
 
 # ─────────────────────────────
 # CAMPAIGN CREATE
@@ -43,9 +41,10 @@ class CampaignCreate(BaseModel):
 @app.post("/api/campaigns")
 async def create_campaign(
     data: CampaignCreate,
-    user=Depends(get_current_user),
     db: Database = Depends(get_db)
 ):
+    user = {"id": "test-user"}  # 🔥 TEMP USER
+
     campaign_id = str(uuid.uuid4())
 
     await db.execute("""
@@ -64,9 +63,10 @@ async def create_campaign(
 async def upload_prospects(
     campaign_id: str,
     file: UploadFile = File(...),
-    user=Depends(get_current_user),
     db: Database = Depends(get_db)
 ):
+    user = {"id": "test-user"}
+
     content = await file.read()
     decoded = content.decode("utf-8")
 
@@ -100,21 +100,20 @@ async def upload_prospects(
 
         inserted_ids.append(pid)
 
-    print(f"✅ Uploaded {len(inserted_ids)} prospects")
-
     return {"message": "Uploaded", "count": len(inserted_ids)}
 
 
 # ─────────────────────────────
-# GENERATE (MANUAL)
+# GENERATE EMAILS
 # ─────────────────────────────
 
 @app.post("/api/campaigns/{campaign_id}/generate")
 async def generate_campaign(
     campaign_id: str,
-    user=Depends(get_current_user),
     db: Database = Depends(get_db)
 ):
+    user = {"id": "test-user"}
+
     enrichment = EnrichmentService()
     generation = GenerationService()
 
@@ -126,19 +125,13 @@ async def generate_campaign(
     if not prospects:
         return {"message": "No prospects found"}
 
-    user_row = await db.fetchrow("SELECT * FROM users WHERE id = $1", user["id"])
-    offer = user_row["offer_context"]
+    # fallback offer (no users table dependency)
+    offer = "We help businesses scale outreach with AI automation."
 
     for p in prospects:
         try:
-            print("\n🚀 START GENERATION")
-            print("📧 Prospect:", p["email"])
-
             enrichment_data = await enrichment.enrich(p)
-
             copy = generation.generate(p, enrichment_data, offer)
-
-            print("🧠 AI RESULT:", copy)
 
             await db.execute("""
                 UPDATE prospects SET
@@ -167,9 +160,10 @@ async def generate_campaign(
 @app.post("/api/campaigns/{campaign_id}/send")
 async def send_campaign_emails(
     campaign_id: str,
-    user=Depends(get_current_user),
     db: Database = Depends(get_db)
 ):
+    user = {"id": "test-user"}
+
     sender = EmailSender()
 
     prospects = await db.fetch("""
@@ -185,8 +179,6 @@ async def send_campaign_emails(
 
     for p in prospects:
         try:
-            print(f"📧 Sending email to {p['email']}")
-
             subject = p.get("subject_line") or "Quick question"
 
             body = f"""
@@ -222,9 +214,10 @@ async def send_campaign_emails(
 @app.get("/api/campaigns/{campaign_id}/prospects")
 async def get_prospects(
     campaign_id: str,
-    user=Depends(get_current_user),
     db: Database = Depends(get_db)
 ):
+    user = {"id": "test-user"}
+
     rows = await db.fetch("""
         SELECT * FROM prospects 
         WHERE campaign_id = $1 AND user_id = $2
