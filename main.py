@@ -6,6 +6,7 @@ from typing import Optional
 import uuid
 import csv
 import io
+import os
 
 from services.enrichment import EnrichmentService
 from services.generation import GenerationService
@@ -19,6 +20,7 @@ app = FastAPI(title="Outreach Engine API", version="1.0.0")
 def root():
     return RedirectResponse(url="/docs")
 
+
 # CORS
 app.add_middleware(
     CORSMiddleware,
@@ -27,6 +29,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 🔥 TEMP USER (VALID UUID)
+TEMP_USER_ID = "11111111-1111-1111-1111-111111111111"
+
 
 # ─────────────────────────────
 # CAMPAIGN CREATE
@@ -43,14 +49,12 @@ async def create_campaign(
     data: CampaignCreate,
     db: Database = Depends(get_db)
 ):
-    user = {"id": "test-user"}  # 🔥 TEMP USER
-
     campaign_id = str(uuid.uuid4())
 
     await db.execute("""
         INSERT INTO campaigns (id, user_id, name, tone, offer_override)
         VALUES ($1, $2, $3, $4, $5)
-    """, campaign_id, user["id"], data.name, data.tone, data.offer_override)
+    """, campaign_id, TEMP_USER_ID, data.name, data.tone, data.offer_override)
 
     return {"id": campaign_id}
 
@@ -65,8 +69,6 @@ async def upload_prospects(
     file: UploadFile = File(...),
     db: Database = Depends(get_db)
 ):
-    user = {"id": "test-user"}
-
     content = await file.read()
     decoded = content.decode("utf-8")
 
@@ -88,7 +90,7 @@ async def upload_prospects(
         """,
             pid,
             campaign_id.strip(),
-            user["id"],
+            TEMP_USER_ID,
             p.get("first_name"),
             p.get("last_name"),
             p.get("email"),
@@ -112,20 +114,17 @@ async def generate_campaign(
     campaign_id: str,
     db: Database = Depends(get_db)
 ):
-    user = {"id": "test-user"}
-
     enrichment = EnrichmentService()
     generation = GenerationService()
 
     prospects = await db.fetch("""
         SELECT * FROM prospects
         WHERE campaign_id = $1 AND user_id = $2
-    """, campaign_id.strip(), user["id"])
+    """, campaign_id.strip(), TEMP_USER_ID)
 
     if not prospects:
         return {"message": "No prospects found"}
 
-    # fallback offer (no users table dependency)
     offer = "We help businesses scale outreach with AI automation."
 
     for p in prospects:
@@ -162,8 +161,6 @@ async def send_campaign_emails(
     campaign_id: str,
     db: Database = Depends(get_db)
 ):
-    user = {"id": "test-user"}
-
     sender = EmailSender()
 
     prospects = await db.fetch("""
@@ -172,7 +169,7 @@ async def send_campaign_emails(
         AND user_id = $2
         AND generation_status = 'done'
         LIMIT 20
-    """, campaign_id, user["id"])
+    """, campaign_id, TEMP_USER_ID)
 
     if not prospects:
         return {"message": "No emails to send"}
@@ -216,11 +213,9 @@ async def get_prospects(
     campaign_id: str,
     db: Database = Depends(get_db)
 ):
-    user = {"id": "test-user"}
-
     rows = await db.fetch("""
         SELECT * FROM prospects 
         WHERE campaign_id = $1 AND user_id = $2
-    """, campaign_id.strip(), user["id"])
+    """, campaign_id.strip(), TEMP_USER_ID)
 
     return rows
