@@ -1,4 +1,5 @@
 import smtplib
+import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -6,9 +7,12 @@ from email.mime.multipart import MIMEMultipart
 class EmailSender:
 
     def __init__(self):
-        # 🔐 Use your Gmail + App Password (NOT normal password)
-        self.email = "abbasimohd298@gmail.com"
-        self.password = "jkcxvqjsxgtnfpqs"
+        # ✅ Load from environment variables (Render)
+        self.email = os.getenv("EMAIL_USER")
+        self.password = os.getenv("EMAIL_PASS")
+
+        if not self.email or not self.password:
+            raise Exception("❌ EMAIL_USER or EMAIL_PASS not set in environment variables")
 
     def send_email(self, to_email, subject, body):
         try:
@@ -35,4 +39,5 @@ class EmailSender:
             print(f"✅ Email sent to {to_email}")
 
         except Exception as e:
-            print(f"❌ SEND ERROR to {to_email}: {e}")
+            print(f"❌ SEND ERROR to {to_email}: {str(e)}")
+            raise e
