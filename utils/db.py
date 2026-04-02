@@ -1,6 +1,8 @@
 import asyncpg
 import os
 
+pool = None
+
 
 class Database:
     def __init__(self, pool):
@@ -20,11 +22,11 @@ class Database:
 
 
 async def get_db():
-    pool = await asyncpg.create_pool(
-        os.getenv(
-            "DATABASE_URL",
-            "postgresql://postgres:postgres@localhost:5432/outreach_engine"
+    global pool
+
+    if pool is None:
+        pool = await asyncpg.create_pool(
+            os.getenv("DATABASE_URL")
         )
-    )
 
     return Database(pool)
