@@ -1,111 +1,60 @@
-import requests
-import json
-import re
-
+import os
+from groq import Groq
 
 class GenerationService:
+    def __init__(self):
+        self.client = Groq(
+            api_key=os.getenv("GROQ_API_KEY")
+        )
 
-    def generate(self, prospect, enrichment, offer, tone="professional"):
+    def generate(self, prospect, enrichment, offer):
+        try:
+            prompt = f"""
+Write a highly personalized cold email.
 
-        prompt = f"""
-Write a short personalized cold email (max 70 words).
-
-Name: {prospect.get("first_name")}
+Prospect Name: {prospect.get("first_name")}
 Company: {prospect.get("company")}
-Role: {prospect.get("title")}
-
+Job Title: {prospect.get("title")}
 Offer: {offer}
 
-Rules:
-- Keep it simple and human
-- Do NOT invent anything
-- Do NOT use placeholders
-- Keep sentences short
-- End with a simple question
+Make it:
+- Short
+- Friendly
+- Personalized
+- Human-like
 
-Return ONLY JSON:
+Return ONLY valid JSON in this format:
 {{
-  "subject": "...",
   "first_line": "...",
+  "subject": "...",
   "body": "..."
 }}
 """
 
-        try:
-            print("⚡ Sending request to Ollama...")
-
-            response = requests.post(
-                "http://localhost:11434/api/generate",
-                json={
-                    "model": "phi3",
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {
-                        "num_predict": 200
-                    }
-                },
-                timeout=120
+            response = self.client.chat.completions.create(
+                model="llama3-8b-8192",
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=500
             )
 
-            if response.status_code != 200:
-                return self.fallback("HTTP Error")
+            text = response.choices[0].message.content.strip()
 
-            data = response.json()
-            output = data.get("response", "")
-
-            print("🧠 RAW AI OUTPUT:", output)
-
-            # ───────── CLEAN OUTPUT ─────────
-            cleaned = output.strip()
-            cleaned = cleaned.replace("```json", "").replace("```", "").strip()
-            cleaned = re.sub(r'"\s*\+\s*"', '', cleaned)
-            cleaned = re.sub(r'"\s*\n\s*"', '",\n"', cleaned)
-
-            print("🧹 CLEANED OUTPUT:", cleaned)
-
-            # ───────── EXTRACT JSON ─────────
-            match = re.search(r"\{[\s\S]*\}", cleaned)
-
-            if match:
-                try:
-                    parsed = json.loads(match.group())
-
-                    subject = parsed.get("subject", "").strip()
-                    first_line = parsed.get("first_line", "").strip()
-                    body = parsed.get("body", "").strip()
-
-                    # ✅ FIX PLACEHOLDERS
-                    body = body.replace("[Name]", prospect.get("first_name") or "")
-                    body = body.replace("Hey ,", f"Hey {prospect.get('first_name')},")
-                    body = body.replace("Hello there!", f"Hi {prospect.get('first_name')},")
-
-                    # ✅ REMOVE GENERIC LINES
-                    if "hope this message finds you well" in first_line.lower():
-                        first_line = f"Hi {prospect.get('first_name')},"
-
-                    return {
-                        "subject": subject,
-                        "first_line": first_line,
-                        "body": body
-                    }
-
-                except:
-                    print("⚠️ JSON parsing failed")
-
-            # ───────── FALLBACK SAFE EMAIL ─────────
+            # ⚠️ fallback (if model doesn't return clean JSON)
             return {
+                "first_line": f"Hi {prospect.get('first_name')},",
                 "subject": "Quick question",
-                "first_line": "",
-                "body": f"Hi {prospect.get('first_name')}, quick question — would you be open to a short chat about {offer}?"
+                "body": text
             }
 
         except Exception as e:
-            return self.fallback(str(e))
+            print("❌ GROQ ERROR:", e)
 
-
-    def fallback(self, message):
-        return {
-            "subject": "Quick question",
-            "first_line": "",
-            "body": message[:150]
-        }
+            # safe fallback (so app never crashes)
+            return {
+                "first_line": f"Hi {prospect.get('first_name')},",
+                "subject": "Quick question",
+                "body": "We help companies scale outreach using AI. Would love to connect."
+            }
