@@ -6,7 +6,6 @@ from typing import Optional
 import uuid
 import csv
 import io
-import os
 
 from services.enrichment import EnrichmentService
 from services.generation import GenerationService
@@ -30,7 +29,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 🔥 TEMP USER (VALID UUID)
+# ✅ VALID USER ID (must exist in DB)
 TEMP_USER_ID = "11111111-1111-1111-1111-111111111111"
 
 
@@ -52,8 +51,8 @@ async def create_campaign(
     campaign_id = str(uuid.uuid4())
 
     await db.execute("""
-        INSERT INTO campaigns (id, user_id, name, tone, offer_override)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO public.campaigns (id, user_id, name, status, tone, offer_override, created_at, updated_at)
+        VALUES ($1, $2, $3, 'pending', $4, $5, NOW(), NOW())
     """, campaign_id, TEMP_USER_ID, data.name, data.tone, data.offer_override)
 
     return {"id": campaign_id}
@@ -84,7 +83,7 @@ async def upload_prospects(
         pid = str(uuid.uuid4())
 
         await db.execute("""
-            INSERT INTO prospects 
+            INSERT INTO public.prospects 
             (id, campaign_id, user_id, first_name, last_name, email, company, title, linkedin_url, website)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
         """,
@@ -118,7 +117,7 @@ async def generate_campaign(
     generation = GenerationService()
 
     prospects = await db.fetch("""
-        SELECT * FROM prospects
+        SELECT * FROM public.prospects
         WHERE campaign_id = $1 AND user_id = $2
     """, campaign_id.strip(), TEMP_USER_ID)
 
@@ -133,7 +132,7 @@ async def generate_campaign(
             copy = generation.generate(p, enrichment_data, offer)
 
             await db.execute("""
-                UPDATE prospects SET
+                UPDATE public.prospects SET
                     personalized_first_line = $1,
                     subject_line = $2,
                     email_body = $3,
@@ -164,7 +163,7 @@ async def send_campaign_emails(
     sender = EmailSender()
 
     prospects = await db.fetch("""
-        SELECT * FROM prospects
+        SELECT * FROM public.prospects
         WHERE campaign_id = $1
         AND user_id = $2
         AND generation_status = 'done'
@@ -187,7 +186,7 @@ async def send_campaign_emails(
             sender.send_email(p["email"], subject, body)
 
             await db.execute("""
-                UPDATE prospects
+                UPDATE public.prospects
                 SET generation_status = 'sent'
                 WHERE id = $1
             """, p["id"])
@@ -196,7 +195,7 @@ async def send_campaign_emails(
             print("❌ SEND ERROR:", e)
 
             await db.execute("""
-                UPDATE prospects
+                UPDATE public.prospects
                 SET generation_status = 'failed'
                 WHERE id = $1
             """, p["id"])
@@ -214,7 +213,7 @@ async def get_prospects(
     db: Database = Depends(get_db)
 ):
     rows = await db.fetch("""
-        SELECT * FROM prospects 
+        SELECT * FROM public.prospects 
         WHERE campaign_id = $1 AND user_id = $2
     """, campaign_id.strip(), TEMP_USER_ID)
 
