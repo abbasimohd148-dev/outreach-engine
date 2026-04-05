@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel
 from typing import Optional
 import uuid
@@ -30,7 +30,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ TEMP USER (must exist in DB)
+# ✅ TEMP USER
 TEMP_USER_ID = "11111111-1111-1111-1111-111111111111"
 
 
@@ -45,14 +45,8 @@ class CampaignCreate(BaseModel):
 
 
 @app.post("/api/campaigns")
-async def create_campaign(
-    data: CampaignCreate,
-    db: Database = Depends(get_db)
-):
+async def create_campaign(data: CampaignCreate, db: Database = Depends(get_db)):
     try:
-        # 🔥 DEBUG: Check DB connection
-        print("🔥 DATABASE_URL =", os.getenv("DATABASE_URL"))
-
         campaign_id = str(uuid.uuid4())
 
         await db.execute("""
@@ -73,11 +67,7 @@ async def create_campaign(
 # ─────────────────────────────
 
 @app.post("/api/campaigns/{campaign_id}/upload")
-async def upload_prospects(
-    campaign_id: str,
-    file: UploadFile = File(...),
-    db: Database = Depends(get_db)
-):
+async def upload_prospects(campaign_id: str, file: UploadFile = File(...), db: Database = Depends(get_db)):
     try:
         content = await file.read()
         decoded = content.decode("utf-8")
@@ -87,8 +77,6 @@ async def upload_prospects(
 
         if not prospects:
             raise HTTPException(status_code=400, detail="CSV is empty")
-
-        inserted_ids = []
 
         for p in prospects:
             pid = str(uuid.uuid4())
@@ -110,9 +98,7 @@ async def upload_prospects(
                 p.get("website")
             )
 
-            inserted_ids.append(pid)
-
-        return {"message": "Uploaded", "count": len(inserted_ids)}
+        return {"message": "Uploaded", "count": len(prospects)}
 
     except Exception as e:
         print("❌ UPLOAD ERROR:", str(e))
@@ -124,10 +110,7 @@ async def upload_prospects(
 # ─────────────────────────────
 
 @app.post("/api/campaigns/{campaign_id}/generate")
-async def generate_campaign(
-    campaign_id: str,
-    db: Database = Depends(get_db)
-):
+async def generate_campaign(campaign_id: str, db: Database = Depends(get_db)):
     try:
         enrichment = EnrichmentService()
         generation = GenerationService()
@@ -172,14 +155,11 @@ async def generate_campaign(
 
 
 # ─────────────────────────────
-# SEND EMAILS
+# SEND EMAILS (WITH TRACKING 🔥)
 # ─────────────────────────────
 
 @app.post("/api/campaigns/{campaign_id}/send")
-async def send_campaign_emails(
-    campaign_id: str,
-    db: Database = Depends(get_db)
-):
+async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db)):
     try:
         sender = EmailSender()
 
@@ -204,7 +184,12 @@ async def send_campaign_emails(
 {p.get("email_body") or ""}
 """
 
-                sender.send_email(p["email"], subject, body)
+                # 🔥 TRACKING PIXEL
+                tracking_pixel = f'<img src="https://outreach-engine-pexa.onrender.com/track/{p["id"]}" width="1" height="1" />'
+
+                full_body = body + tracking_pixel
+
+                sender.send_email(p["email"], subject, full_body)
 
                 await db.execute("""
                     UPDATE public.prospects
@@ -229,14 +214,33 @@ async def send_campaign_emails(
 
 
 # ─────────────────────────────
+# TRACK EMAIL OPEN 🔥
+# ─────────────────────────────
+
+@app.get("/track/{prospect_id}")
+async def track_email_open(prospect_id: str, db: Database = Depends(get_db)):
+    try:
+        await db.execute("""
+            UPDATE public.prospects
+            SET opened = TRUE
+            WHERE id = $1
+        """, prospect_id)
+
+        pixel = b'\x47\x49\x46\x38\x39\x61\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;'
+
+        return Response(content=pixel, media_type="image/gif")
+
+    except Exception as e:
+        print("❌ TRACK ERROR:", e)
+        return {"error": str(e)}
+
+
+# ─────────────────────────────
 # VIEW PROSPECTS
 # ─────────────────────────────
 
 @app.get("/api/campaigns/{campaign_id}/prospects")
-async def get_prospects(
-    campaign_id: str,
-    db: Database = Depends(get_db)
-):
+async def get_prospects(campaign_id: str, db: Database = Depends(get_db)):
     try:
         rows = await db.fetch("""
             SELECT * FROM public.prospects 
@@ -248,6 +252,8 @@ async def get_prospects(
     except Exception as e:
         print("❌ FETCH ERROR:", str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+
 # ─────────────────────────────
 # FIX DB (ADD OPENED COLUMN)
 # ─────────────────────────────
@@ -260,6 +266,7 @@ async def fix_db(db: Database = Depends(get_db)):
             ADD COLUMN IF NOT EXISTS opened BOOLEAN DEFAULT FALSE;
         """)
         return {"message": "DB updated successfully"}
+
     except Exception as e:
         print("❌ FIX DB ERROR:", str(e))
         raise HTTPException(status_code=500, detail=str(e))
