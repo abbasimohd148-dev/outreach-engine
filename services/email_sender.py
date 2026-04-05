@@ -1,42 +1,32 @@
-import smtplib
 import os
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import resend
 
 
 class EmailSender:
 
     def __init__(self):
-        # ✅ Load from environment variables (Render)
-        self.email = os.getenv("EMAIL_USER")
-        self.password = os.getenv("EMAIL_PASS")
+        # ✅ Load API key from environment (Render)
+        resend.api_key = os.getenv("RESEND_API_KEY")
+        self.from_email = os.getenv("FROM_EMAIL")
 
-        if not self.email or not self.password:
-            raise Exception("❌ EMAIL_USER or EMAIL_PASS not set in environment variables")
+        if not resend.api_key or not self.from_email:
+            raise Exception("❌ RESEND_API_KEY or FROM_EMAIL not set in environment variables")
 
     def send_email(self, to_email, subject, body):
         try:
-            # ✅ Create message
-            msg = MIMEMultipart()
-            msg["From"] = self.email
-            msg["To"] = to_email
-            msg["Subject"] = subject
-
-            msg.attach(MIMEText(body, "plain"))
-
-            # ✅ Connect to Gmail SMTP
-            server = smtplib.SMTP("smtp.gmail.com", 587)
-            server.starttls()
-
-            # ✅ Login
-            server.login(self.email, self.password)
-
-            # ✅ Send email
-            server.sendmail(self.email, to_email, msg.as_string())
-
-            server.quit()
+            response = resend.Emails.send({
+                "from": self.from_email,
+                "to": [to_email],
+                "subject": subject,
+                "html": f"""
+                    <div style="font-family: Arial, sans-serif; line-height: 1.6;">
+                        <p>{body}</p>
+                    </div>
+                """
+            })
 
             print(f"✅ Email sent to {to_email}")
+            print("📨 Response:", response)
 
         except Exception as e:
             print(f"❌ SEND ERROR to {to_email}: {str(e)}")
