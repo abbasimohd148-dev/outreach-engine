@@ -15,6 +15,7 @@ from utils.db import get_db, Database
 
 app = FastAPI(title="Outreach Engine API", version="1.0.0")
 
+
 # Root → Docs redirect
 @app.get("/")
 def root():
@@ -155,7 +156,7 @@ async def generate_campaign(campaign_id: str, db: Database = Depends(get_db)):
 
 
 # ─────────────────────────────
-# SEND EMAILS (WITH TRACKING)
+# SEND EMAILS (HTML + TRACKING ✅)
 # ─────────────────────────────
 
 @app.post("/api/campaigns/{campaign_id}/send")
@@ -180,13 +181,13 @@ async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db))
             try:
                 subject = p.get("subject_line") or "Quick question"
 
+                # ✅ HTML BODY (FIXED)
                 body = f"""
-{p.get("personalized_first_line") or ""}
+                <p>{p.get("personalized_first_line") or ""}</p>
+                <p>{p.get("email_body") or ""}</p>
+                """
 
-{p.get("email_body") or ""}
-"""
-
-                # Tracking pixel
+                # ✅ TRACKING PIXEL
                 tracking_pixel = f'<img src="{BASE_URL}/track/{p["id"]}" width="1" height="1" />'
 
                 full_body = body + tracking_pixel
@@ -228,7 +229,6 @@ async def track_email_open(prospect_id: str, db: Database = Depends(get_db)):
             WHERE id = $1
         """, prospect_id)
 
-        # 1x1 transparent pixel (GIF)
         pixel = b'\x47\x49\x46\x38\x39\x61\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;'
 
         return Response(content=pixel, media_type="image/gif")
