@@ -156,7 +156,7 @@ async def generate_campaign(campaign_id: str, db: Database = Depends(get_db)):
 
 
 # ─────────────────────────────
-# SEND EMAILS (HTML + TRACKING ✅)
+# SEND EMAILS (SAFE + TRACKING)
 # ─────────────────────────────
 
 @app.post("/api/campaigns/{campaign_id}/send")
@@ -181,7 +181,7 @@ async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db))
             try:
                 subject = p.get("subject_line") or "Quick question"
 
-                # ✅ HTML BODY (FIXED)
+                # ✅ HTML BODY
                 body = f"""
                 <p>{p.get("personalized_first_line") or ""}</p>
                 <p>{p.get("email_body") or ""}</p>
@@ -189,27 +189,31 @@ async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db))
 
                 # ✅ TRACKING PIXEL
                 tracking_pixel = f'<img src="{BASE_URL}/track/{p["id"]}" width="1" height="1" />'
-
                 full_body = body + tracking_pixel
 
-                sender.send_email(p["email"], subject, full_body)
+                # 🔥 SAFE EMAIL SEND
+                try:
+                    sender.send_email(p["email"], subject, full_body)
 
-                await db.execute("""
-                    UPDATE public.prospects
-                    SET generation_status = 'sent'
-                    WHERE id = $1
-                """, p["id"])
+                    await db.execute("""
+                        UPDATE public.prospects
+                        SET generation_status = 'sent'
+                        WHERE id = $1
+                    """, p["id"])
+
+                except Exception as send_error:
+                    print("❌ EMAIL FAILED:", send_error)
+
+                    await db.execute("""
+                        UPDATE public.prospects
+                        SET generation_status = 'failed'
+                        WHERE id = $1
+                    """, p["id"])
 
             except Exception as e:
-                print("❌ SEND ERROR:", e)
+                print("❌ LOOP ERROR:", e)
 
-                await db.execute("""
-                    UPDATE public.prospects
-                    SET generation_status = 'failed'
-                    WHERE id = $1
-                """, p["id"])
-
-        return {"message": "Emails sent", "count": len(prospects)}
+        return {"message": "Emails processed", "count": len(prospects)}
 
     except Exception as e:
         print("❌ SEND MAIN ERROR:", str(e))
