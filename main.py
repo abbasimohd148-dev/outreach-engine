@@ -248,3 +248,18 @@ async def get_prospects(
     except Exception as e:
         print("❌ FETCH ERROR:", str(e))
         raise HTTPException(status_code=500, detail=str(e))
+# ─────────────────────────────
+# FIX DB (ADD OPENED COLUMN)
+# ─────────────────────────────
+
+@app.get("/api/fix-db")
+async def fix_db(db: Database = Depends(get_db)):
+    try:
+        await db.execute("""
+            ALTER TABLE public.prospects 
+            ADD COLUMN IF NOT EXISTS opened BOOLEAN DEFAULT FALSE;
+        """)
+        return {"message": "DB updated successfully"}
+    except Exception as e:
+        print("❌ FIX DB ERROR:", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
