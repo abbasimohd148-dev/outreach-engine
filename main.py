@@ -15,13 +15,10 @@ from utils.db import get_db, Database
 
 app = FastAPI(title="Outreach Engine API", version="1.0.0")
 
-# Root → Docs redirect
 @app.get("/")
 def root():
     return RedirectResponse(url="/docs")
 
-
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -30,9 +27,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# TEMP USER
 TEMP_USER_ID = "11111111-1111-1111-1111-111111111111"
-
 
 # ─────────────────────────────
 # CREATE CAMPAIGN
@@ -58,7 +53,6 @@ async def create_campaign(data: CampaignCreate, db: Database = Depends(get_db)):
         return {"id": campaign_id}
 
     except Exception as e:
-        print("❌ CREATE CAMPAIGN ERROR:", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -75,19 +69,14 @@ async def upload_prospects(campaign_id: str, file: UploadFile = File(...), db: D
         reader = csv.DictReader(io.StringIO(decoded))
         prospects = list(reader)
 
-        if not prospects:
-            raise HTTPException(status_code=400, detail="CSV is empty")
-
         for p in prospects:
-            pid = str(uuid.uuid4())
-
             await db.execute("""
                 INSERT INTO public.prospects 
                 (id, campaign_id, user_id, first_name, last_name, email, company, title, linkedin_url, website)
                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
             """,
-                pid,
-                campaign_id.strip(),
+                str(uuid.uuid4()),
+                campaign_id,
                 TEMP_USER_ID,
                 p.get("first_name"),
                 p.get("last_name"),
@@ -101,7 +90,6 @@ async def upload_prospects(campaign_id: str, file: UploadFile = File(...), db: D
         return {"message": "Uploaded", "count": len(prospects)}
 
     except Exception as e:
-        print("❌ UPLOAD ERROR:", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -111,57 +99,47 @@ async def upload_prospects(campaign_id: str, file: UploadFile = File(...), db: D
 
 @app.post("/api/campaigns/{campaign_id}/generate")
 async def generate_campaign(campaign_id: str, db: Database = Depends(get_db)):
-    try:
-        enrichment = EnrichmentService()
-        generation = GenerationService()
+    enrichment = EnrichmentService()
+    generation = GenerationService()
 
-        prospects = await db.fetch("""
-            SELECT * FROM public.prospects
-            WHERE campaign_id = $1 AND user_id = $2
-        """, campaign_id.strip(), TEMP_USER_ID)
+    prospects = await db.fetch("""
+        SELECT * FROM public.prospects
+        WHERE campaign_id = $1 AND user_id = $2
+    """, campaign_id, TEMP_USER_ID)
 
-        if not prospects:
-            return {"message": "No prospects found"}
+    for p in prospects:
+        try:
+            data = await enrichment.enrich(p)
+            copy = generation.generate(p, data, "We help businesses scale outreach using AI.")
 
-        offer = "We help businesses scale outreach using AI."
+            await db.execute("""
+                UPDATE public.prospects SET
+                    personalized_first_line = $1,
+                    subject_line = $2,
+                    email_body = $3,
+                    generation_status = 'done'
+                WHERE id = $4
+            """,
+                copy.get("first_line", ""),
+                copy.get("subject", ""),
+                copy.get("body", ""),
+                p["id"]
+            )
 
-        for p in prospects:
-            try:
-                enrichment_data = await enrichment.enrich(p)
-                copy = generation.generate(p, enrichment_data, offer)
+        except:
+            pass
 
-                await db.execute("""
-                    UPDATE public.prospects SET
-                        personalized_first_line = $1,
-                        subject_line = $2,
-                        email_body = $3,
-                        generation_status = 'done'
-                    WHERE id = $4
-                """,
-                    copy.get("first_line", ""),
-                    copy.get("subject", ""),
-                    copy.get("body", ""),
-                    p["id"]
-                )
-
-            except Exception as e:
-                print("❌ GENERATION ERROR:", e)
-
-        return {"message": "Generation completed"}
-
-    except Exception as e:
-        print("❌ GENERATE ERROR:", str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+    return {"message": "Generated"}
 
 
 # ─────────────────────────────
-# SEND EMAILS (DEBUG + TRACKING)
+# SEND EMAILS (FINAL FIXED)
 # ─────────────────────────────
 
 @app.post("/api/campaigns/{campaign_id}/send")
 async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db)):
     try:
-        print("🔥 SEND API TRIGGERED")
+        print("🔥 SEND STARTED")
 
         sender = EmailSender()
 
@@ -169,12 +147,13 @@ async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db))
             SELECT * FROM public.prospects
             WHERE campaign_id = $1
             AND user_id = $2
+            AND generation_status IN ('done', 'failed')
         """, campaign_id, TEMP_USER_ID)
 
-        print("📊 Prospects found:", len(prospects))
+        print("📊 Found:", len(prospects))
 
         if not prospects:
-            return {"message": "No prospects found"}
+            return {"message": "No emails to send", "count": 0}
 
         BASE_URL = os.getenv("BASE_URL", "https://outreach-engine-pexa.onrender.com")
 
@@ -182,7 +161,7 @@ async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db))
 
         for p in prospects:
             try:
-                print("👉 Sending to:", p["email"])
+                print("📤 Sending:", p["email"])
 
                 subject = p.get("subject_line") or "Quick question"
 
@@ -191,7 +170,6 @@ async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db))
 <p>{p.get("email_body") or ""}</p>
 """
 
-                # 🔥 Tracking pixel
                 tracking_pixel = f'<img src="{BASE_URL}/track/{p["id"]}" width="1" height="1" />'
 
                 full_body = body + tracking_pixel
@@ -207,7 +185,7 @@ async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db))
                 """, p["id"])
 
             except Exception as e:
-                print("❌ SEND ERROR:", e)
+                print("❌ SEND FAIL:", e)
 
                 await db.execute("""
                     UPDATE public.prospects
@@ -218,7 +196,6 @@ async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db))
         return {"message": "Emails processed", "count": sent_count}
 
     except Exception as e:
-        print("❌ SEND MAIN ERROR:", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -228,22 +205,15 @@ async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db))
 
 @app.get("/track/{prospect_id}")
 async def track_email_open(prospect_id: str, db: Database = Depends(get_db)):
-    try:
-        print("📬 Email opened:", prospect_id)
+    await db.execute("""
+        UPDATE public.prospects
+        SET opened = TRUE
+        WHERE id = $1
+    """, prospect_id)
 
-        await db.execute("""
-            UPDATE public.prospects
-            SET opened = TRUE
-            WHERE id = $1
-        """, prospect_id)
+    pixel = b'\x47\x49\x46\x38\x39\x61\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;'
 
-        pixel = b'\x47\x49\x46\x38\x39\x61\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;'
-
-        return Response(content=pixel, media_type="image/gif")
-
-    except Exception as e:
-        print("❌ TRACK ERROR:", e)
-        return Response(content=b"", media_type="image/gif")
+    return Response(content=pixel, media_type="image/gif")
 
 
 # ─────────────────────────────
@@ -252,17 +222,10 @@ async def track_email_open(prospect_id: str, db: Database = Depends(get_db)):
 
 @app.get("/api/campaigns/{campaign_id}/prospects")
 async def get_prospects(campaign_id: str, db: Database = Depends(get_db)):
-    try:
-        rows = await db.fetch("""
-            SELECT * FROM public.prospects 
-            WHERE campaign_id = $1 AND user_id = $2
-        """, campaign_id.strip(), TEMP_USER_ID)
-
-        return rows
-
-    except Exception as e:
-        print("❌ FETCH ERROR:", str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+    return await db.fetch("""
+        SELECT * FROM public.prospects 
+        WHERE campaign_id = $1 AND user_id = $2
+    """, campaign_id, TEMP_USER_ID)
 
 
 # ─────────────────────────────
@@ -271,13 +234,8 @@ async def get_prospects(campaign_id: str, db: Database = Depends(get_db)):
 
 @app.get("/api/fix-db")
 async def fix_db(db: Database = Depends(get_db)):
-    try:
-        await db.execute("""
-            ALTER TABLE public.prospects 
-            ADD COLUMN IF NOT EXISTS opened BOOLEAN DEFAULT FALSE;
-        """)
-        return {"message": "DB updated successfully"}
-
-    except Exception as e:
-        print("❌ FIX DB ERROR:", str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+    await db.execute("""
+        ALTER TABLE public.prospects 
+        ADD COLUMN IF NOT EXISTS opened BOOLEAN DEFAULT FALSE;
+    """)
+    return {"message": "DB fixed"}
