@@ -1,33 +1,33 @@
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import os
-import resend
-
 
 class EmailSender:
-
     def __init__(self):
-        # ✅ Load API key from environment (Render)
-        resend.api_key = os.getenv("RESEND_API_KEY")
-        self.from_email = os.getenv("FROM_EMAIL")
-
-        if not resend.api_key or not self.from_email:
-            raise Exception("❌ RESEND_API_KEY or FROM_EMAIL not set in environment variables")
+        self.smtp_server = "smtp.gmail.com"
+        self.smtp_port = 587
+        self.email = os.getenv("EMAIL_USER")
+        self.password = os.getenv("EMAIL_PASS")
 
     def send_email(self, to_email, subject, body):
         try:
-            response = resend.Emails.send({
-                "from": self.from_email,
-                "to": [to_email],
-                "subject": subject,
-                "html": f"""
-                    <div style="font-family: Arial, sans-serif; line-height: 1.6;">
-                        <p>{body}</p>
-                    </div>
-                """
-            })
+            msg = MIMEMultipart()
+            msg["From"] = self.email
+            msg["To"] = to_email
+            msg["Subject"] = subject
 
-            print(f"✅ Email sent to {to_email}")
-            print("📨 Response:", response)
+            msg.attach(MIMEText(body, "plain"))
+
+            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
+            server.starttls()
+            server.login(self.email, self.password)
+
+            server.send_message(msg)
+            server.quit()
+
+            print("✅ Email sent to", to_email)
 
         except Exception as e:
-            print(f"❌ SEND ERROR to {to_email}: {str(e)}")
+            print("❌ Email failed:", str(e))
             raise e
