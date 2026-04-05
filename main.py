@@ -30,7 +30,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ TEMP USER
+# TEMP USER
 TEMP_USER_ID = "11111111-1111-1111-1111-111111111111"
 
 
@@ -155,7 +155,7 @@ async def generate_campaign(campaign_id: str, db: Database = Depends(get_db)):
 
 
 # ─────────────────────────────
-# SEND EMAILS (WITH TRACKING 🔥)
+# SEND EMAILS (WITH TRACKING)
 # ─────────────────────────────
 
 @app.post("/api/campaigns/{campaign_id}/send")
@@ -174,6 +174,8 @@ async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db))
         if not prospects:
             return {"message": "No emails to send"}
 
+        BASE_URL = os.getenv("BASE_URL", "https://outreach-engine-pexa.onrender.com")
+
         for p in prospects:
             try:
                 subject = p.get("subject_line") or "Quick question"
@@ -184,8 +186,8 @@ async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db))
 {p.get("email_body") or ""}
 """
 
-                # 🔥 TRACKING PIXEL
-                tracking_pixel = f'<img src="https://outreach-engine-pexa.onrender.com/track/{p["id"]}" width="1" height="1" />'
+                # Tracking pixel
+                tracking_pixel = f'<img src="{BASE_URL}/track/{p["id"]}" width="1" height="1" />'
 
                 full_body = body + tracking_pixel
 
@@ -214,7 +216,7 @@ async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db))
 
 
 # ─────────────────────────────
-# TRACK EMAIL OPEN 🔥
+# TRACK EMAIL OPEN
 # ─────────────────────────────
 
 @app.get("/track/{prospect_id}")
@@ -226,13 +228,14 @@ async def track_email_open(prospect_id: str, db: Database = Depends(get_db)):
             WHERE id = $1
         """, prospect_id)
 
+        # 1x1 transparent pixel (GIF)
         pixel = b'\x47\x49\x46\x38\x39\x61\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;'
 
         return Response(content=pixel, media_type="image/gif")
 
     except Exception as e:
-        print("❌ TRACK ERROR:", e)
-        return {"error": str(e)}
+        print("❌ TRACK ERROR:", str(e))
+        return Response(content=b"", media_type="image/gif")
 
 
 # ─────────────────────────────
@@ -255,7 +258,7 @@ async def get_prospects(campaign_id: str, db: Database = Depends(get_db)):
 
 
 # ─────────────────────────────
-# FIX DB (ADD OPENED COLUMN)
+# FIX DB
 # ─────────────────────────────
 
 @app.get("/api/fix-db")
