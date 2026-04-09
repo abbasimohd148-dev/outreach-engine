@@ -9,7 +9,7 @@ import io
 import os
 import asyncio
 
-from passlib.context import CryptContext  # 🔐 NEW
+from passlib.context import CryptContext  # 🔐 AUTH
 
 from services.enrichment import EnrichmentService
 from services.generation import GenerationService
@@ -19,24 +19,23 @@ from utils.db import get_db, Database
 app = FastAPI(title="Outreach Engine API", version="1.0.0")
 
 
-# ─────────────────────────────
-# ROOT + HEALTH
-# ─────────────────────────────
+# 🔐 PASSWORD HASHING
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+
+# ✅ ROOT
 @app.get("/")
 def root():
     return RedirectResponse(url="/docs")
 
 
+# ✅ HEALTH CHECK
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
 
-# ─────────────────────────────
-# CORS
-# ─────────────────────────────
-
+# ✅ CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -45,68 +44,79 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 🔥 TEMP (will replace later with real user auth)
 TEMP_USER_ID = "11111111-1111-1111-1111-111111111111"
 
 
 # ─────────────────────────────
-# 🔐 AUTH SYSTEM
+# 🔐 AUTH MODELS
 # ─────────────────────────────
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-
-class UserSignup(BaseModel):
+class SignupRequest(BaseModel):
     email: str
     password: str
 
 
-class UserLogin(BaseModel):
+class LoginRequest(BaseModel):
     email: str
     password: str
 
 
-def hash_password(password: str):
-    return pwd_context.hash(password)
-
-
-def verify_password(password: str, hashed: str):
-    return pwd_context.verify(password, hashed)
-
+# ─────────────────────────────
+# 🔐 SIGNUP
+# ─────────────────────────────
 
 @app.post("/auth/signup")
-async def signup(data: UserSignup, db: Database = Depends(get_db)):
+async def signup(data: SignupRequest, db: Database = Depends(get_db)):
     try:
+        existing = await db.fetchrow(
+            "SELECT * FROM public.users WHERE email = $1",
+            data.email
+        )
+
+        if existing:
+            raise HTTPException(status_code=400, detail="User already exists")
+
+        hashed_password = pwd_context.hash(data.password)
+
         user_id = str(uuid.uuid4())
-        hashed = hash_password(data.password)
 
         await db.execute("""
             INSERT INTO public.users (id, email, password)
             VALUES ($1, $2, $3)
-        """, user_id, data.email, hashed)
+        """, user_id, data.email, hashed_password)
 
-        return {"message": "User created"}
+        return {"message": "User created", "user_id": user_id}
 
-    except Exception:
-        raise HTTPException(status_code=400, detail="User already exists")
+    except Exception as e:
+        print("❌ SIGNUP ERROR:", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
+
+# ─────────────────────────────
+# 🔐 LOGIN (FIXED)
+# ─────────────────────────────
 
 @app.post("/auth/login")
-async def login(data: UserLogin, db: Database = Depends(get_db)):
-    user = await db.fetchrow("""
-        SELECT * FROM public.users WHERE email = $1
-    """, data.email)
+async def login(data: LoginRequest, db: Database = Depends(get_db)):
+    try:
+        user = await db.fetchrow("""
+            SELECT * FROM public.users WHERE email = $1
+        """, data.email)
 
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid email")
+        if not user:
+            raise HTTPException(status_code=400, detail="User not found")
 
-    if not verify_password(data.password, user["password"]):
-        raise HTTPException(status_code=401, detail="Wrong password")
+        if not pwd_context.verify(data.password, user["password"]):
+            raise HTTPException(status_code=400, detail="Invalid password")
 
-    return {
-        "message": "Login successful",
-        "user_id": user["id"]
-    }
+        return {
+            "message": "Login successful",
+            "user_id": user["id"]
+        }
+
+    except Exception as e:
+        print("❌ LOGIN ERROR:", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ─────────────────────────────
@@ -261,12 +271,6 @@ async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db))
             except Exception as e:
                 print("❌ SEND FAIL:", e)
 
-                await db.execute("""
-                    UPDATE public.prospects
-                    SET generation_status = 'failed'
-                    WHERE id = $1
-                """, p["id"])
-
         return {"message": "Emails processed", "count": sent_count}
 
     except Exception as e:
@@ -285,7 +289,7 @@ async def track_email_open(prospect_id: str, db: Database = Depends(get_db)):
         WHERE id = $1
     """, prospect_id)
 
-    pixel = b'GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;'
+    pixel = b'\x47\x49\x46\x38\x39\x61\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;'
 
     return Response(content=pixel, media_type="image/gif")
 
