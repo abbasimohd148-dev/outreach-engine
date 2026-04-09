@@ -7,7 +7,9 @@ import uuid
 import csv
 import io
 import os
-import asyncio  # 🔥 IMPORTANT
+import asyncio
+
+from passlib.context import CryptContext  # 🔐 NEW
 
 from services.enrichment import EnrichmentService
 from services.generation import GenerationService
@@ -17,19 +19,24 @@ from utils.db import get_db, Database
 app = FastAPI(title="Outreach Engine API", version="1.0.0")
 
 
-# ✅ ROOT
+# ─────────────────────────────
+# ROOT + HEALTH
+# ─────────────────────────────
+
 @app.get("/")
 def root():
     return RedirectResponse(url="/docs")
 
 
-# ✅ HEALTH CHECK (VERY IMPORTANT)
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
 
-# ✅ CORS
+# ─────────────────────────────
+# CORS
+# ─────────────────────────────
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -38,7 +45,68 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 🔥 TEMP (will replace later with real user auth)
 TEMP_USER_ID = "11111111-1111-1111-1111-111111111111"
+
+
+# ─────────────────────────────
+# 🔐 AUTH SYSTEM
+# ─────────────────────────────
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+class UserSignup(BaseModel):
+    email: str
+    password: str
+
+
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+
+def hash_password(password: str):
+    return pwd_context.hash(password)
+
+
+def verify_password(password: str, hashed: str):
+    return pwd_context.verify(password, hashed)
+
+
+@app.post("/auth/signup")
+async def signup(data: UserSignup, db: Database = Depends(get_db)):
+    try:
+        user_id = str(uuid.uuid4())
+        hashed = hash_password(data.password)
+
+        await db.execute("""
+            INSERT INTO public.users (id, email, password)
+            VALUES ($1, $2, $3)
+        """, user_id, data.email, hashed)
+
+        return {"message": "User created"}
+
+    except Exception:
+        raise HTTPException(status_code=400, detail="User already exists")
+
+
+@app.post("/auth/login")
+async def login(data: UserLogin, db: Database = Depends(get_db)):
+    user = await db.fetchrow("""
+        SELECT * FROM public.users WHERE email = $1
+    """, data.email)
+
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email")
+
+    if not verify_password(data.password, user["password"]):
+        raise HTTPException(status_code=401, detail="Wrong password")
+
+    return {
+        "message": "Login successful",
+        "user_id": user["id"]
+    }
 
 
 # ─────────────────────────────
@@ -145,14 +213,12 @@ async def generate_campaign(campaign_id: str, db: Database = Depends(get_db)):
 
 
 # ─────────────────────────────
-# SEND EMAILS (FIXED + NON-BLOCKING)
+# SEND EMAILS (NON-BLOCKING)
 # ─────────────────────────────
 
 @app.post("/api/campaigns/{campaign_id}/send")
 async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db)):
     try:
-        print("🔥 SEND STARTED")
-
         sender = EmailSender()
 
         prospects = await db.fetch("""
@@ -163,8 +229,6 @@ async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db))
             LIMIT 10
         """, campaign_id, TEMP_USER_ID)
 
-        print("📊 Found:", len(prospects))
-
         if not prospects:
             return {"message": "No emails to send", "count": 0}
 
@@ -174,8 +238,6 @@ async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db))
 
         for p in prospects:
             try:
-                print("📤 Sending:", p["email"])
-
                 subject = p.get("subject_line") or "Quick question"
 
                 body = f"""
@@ -186,7 +248,6 @@ async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db))
                 tracking_pixel = f'<img src="{BASE_URL}/track/{p["id"]}" width="1" height="1" />'
                 full_body = body + tracking_pixel
 
-                # 🔥 NON-BLOCKING EMAIL SEND
                 await asyncio.to_thread(sender.send_email, p["email"], subject, full_body)
 
                 sent_count += 1
@@ -224,7 +285,7 @@ async def track_email_open(prospect_id: str, db: Database = Depends(get_db)):
         WHERE id = $1
     """, prospect_id)
 
-    pixel = b'\x47\x49\x46\x38\x39\x61\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;'
+    pixel = b'GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;'
 
     return Response(content=pixel, media_type="image/gif")
 
