@@ -7,6 +7,7 @@ import uuid
 import csv
 import io
 import os
+import asyncio  # 🔥 IMPORTANT
 
 from services.enrichment import EnrichmentService
 from services.generation import GenerationService
@@ -15,10 +16,20 @@ from utils.db import get_db, Database
 
 app = FastAPI(title="Outreach Engine API", version="1.0.0")
 
+
+# ✅ ROOT
 @app.get("/")
 def root():
     return RedirectResponse(url="/docs")
 
+
+# ✅ HEALTH CHECK (VERY IMPORTANT)
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
+# ✅ CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -28,6 +39,7 @@ app.add_middleware(
 )
 
 TEMP_USER_ID = "11111111-1111-1111-1111-111111111111"
+
 
 # ─────────────────────────────
 # CREATE CAMPAIGN
@@ -126,14 +138,14 @@ async def generate_campaign(campaign_id: str, db: Database = Depends(get_db)):
                 p["id"]
             )
 
-        except:
-            pass
+        except Exception as e:
+            print("❌ GENERATION ERROR:", e)
 
     return {"message": "Generated"}
 
 
 # ─────────────────────────────
-# SEND EMAILS (FINAL FIXED)
+# SEND EMAILS (FIXED + NON-BLOCKING)
 # ─────────────────────────────
 
 @app.post("/api/campaigns/{campaign_id}/send")
@@ -147,7 +159,8 @@ async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db))
             SELECT * FROM public.prospects
             WHERE campaign_id = $1
             AND user_id = $2
-            AND generation_status IN ('done', 'failed')
+            AND generation_status = 'done'
+            LIMIT 10
         """, campaign_id, TEMP_USER_ID)
 
         print("📊 Found:", len(prospects))
@@ -171,10 +184,10 @@ async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db))
 """
 
                 tracking_pixel = f'<img src="{BASE_URL}/track/{p["id"]}" width="1" height="1" />'
-
                 full_body = body + tracking_pixel
 
-                sender.send_email(p["email"], subject, full_body)
+                # 🔥 NON-BLOCKING EMAIL SEND
+                await asyncio.to_thread(sender.send_email, p["email"], subject, full_body)
 
                 sent_count += 1
 
