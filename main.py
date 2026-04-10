@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel
@@ -10,6 +10,10 @@ import os
 import asyncio
 
 from passlib.context import CryptContext
+
+# ✅ JWT
+from jose import JWTError, jwt
+from datetime import datetime, timedelta
 
 from services.enrichment import EnrichmentService
 from services.generation import GenerationService
@@ -23,10 +27,32 @@ app = FastAPI(title="Outreach Engine API", version="1.0.0")
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def hash_password(password: str):
-    return pwd_context.hash(password[:72])  # ✅ FIX
+    return pwd_context.hash(password[:72])  # bcrypt limit fix
 
 def verify_password(plain, hashed):
     return pwd_context.verify(plain, hashed)
+
+
+# 🔐 JWT CONFIG
+SECRET_KEY = "supersecretkey123"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
+
+
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
+async def get_current_user(authorization: str = Header(...)):
+    try:
+        token = authorization.split(" ")[1]
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload["user_id"]
+    except:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
 
 # ✅ ROOT
@@ -50,8 +76,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-TEMP_USER_ID = "11111111-1111-1111-1111-111111111111"
-
 
 # ─────────────────────────────
 # 🔐 AUTH MODELS
@@ -68,7 +92,7 @@ class LoginRequest(BaseModel):
 
 
 # ─────────────────────────────
-# 🔐 SIGNUP (FIXED)
+# 🔐 SIGNUP
 # ─────────────────────────────
 
 @app.post("/auth/signup")
@@ -82,7 +106,7 @@ async def signup(data: SignupRequest, db: Database = Depends(get_db)):
         if existing:
             raise HTTPException(status_code=400, detail="User already exists")
 
-        hashed_password = hash_password(data.password)  # ✅ FIXED
+        hashed_password = hash_password(data.password)
 
         user_id = str(uuid.uuid4())
 
@@ -101,7 +125,7 @@ async def signup(data: SignupRequest, db: Database = Depends(get_db)):
 
 
 # ─────────────────────────────
-# 🔐 LOGIN (FIXED)
+# 🔐 LOGIN (JWT ENABLED)
 # ─────────────────────────────
 
 @app.post("/auth/login")
@@ -115,11 +139,14 @@ async def login(data: LoginRequest, db: Database = Depends(get_db)):
         if not user:
             raise HTTPException(status_code=400, detail="User not found")
 
-        if not verify_password(data.password, user["password"]):  # ✅ FIXED
+        if not verify_password(data.password, user["password"]):
             raise HTTPException(status_code=400, detail="Invalid password")
+
+        token = create_access_token({"user_id": str(user["id"])})
 
         return {
             "message": "Login successful",
+            "access_token": token,
             "user_id": user["id"]
         }
 
@@ -131,7 +158,7 @@ async def login(data: LoginRequest, db: Database = Depends(get_db)):
 
 
 # ─────────────────────────────
-# CREATE CAMPAIGN
+# CREATE CAMPAIGN (JWT USER)
 # ─────────────────────────────
 
 class CampaignCreate(BaseModel):
@@ -141,7 +168,11 @@ class CampaignCreate(BaseModel):
 
 
 @app.post("/api/campaigns")
-async def create_campaign(data: CampaignCreate, db: Database = Depends(get_db)):
+async def create_campaign(
+    data: CampaignCreate,
+    db: Database = Depends(get_db),
+    user_id: str = Depends(get_current_user)
+):
     try:
         campaign_id = str(uuid.uuid4())
 
@@ -149,7 +180,7 @@ async def create_campaign(data: CampaignCreate, db: Database = Depends(get_db)):
             INSERT INTO public.campaigns 
             (id, user_id, name, status, tone, offer_override, created_at, updated_at)
             VALUES ($1, $2, $3, 'pending', $4, $5, NOW(), NOW())
-        """, campaign_id, TEMP_USER_ID, data.name, data.tone, data.offer_override)
+        """, campaign_id, user_id, data.name, data.tone, data.offer_override)
 
         return {"id": campaign_id}
 
@@ -158,11 +189,16 @@ async def create_campaign(data: CampaignCreate, db: Database = Depends(get_db)):
 
 
 # ─────────────────────────────
-# UPLOAD CSV
+# UPLOAD CSV (JWT USER)
 # ─────────────────────────────
 
 @app.post("/api/campaigns/{campaign_id}/upload")
-async def upload_prospects(campaign_id: str, file: UploadFile = File(...), db: Database = Depends(get_db)):
+async def upload_prospects(
+    campaign_id: str,
+    file: UploadFile = File(...),
+    db: Database = Depends(get_db),
+    user_id: str = Depends(get_current_user)
+):
     try:
         content = await file.read()
         decoded = content.decode("utf-8")
@@ -178,7 +214,7 @@ async def upload_prospects(campaign_id: str, file: UploadFile = File(...), db: D
             """,
                 str(uuid.uuid4()),
                 campaign_id,
-                TEMP_USER_ID,
+                user_id,
                 p.get("first_name"),
                 p.get("last_name"),
                 p.get("email"),
@@ -199,14 +235,18 @@ async def upload_prospects(campaign_id: str, file: UploadFile = File(...), db: D
 # ─────────────────────────────
 
 @app.post("/api/campaigns/{campaign_id}/generate")
-async def generate_campaign(campaign_id: str, db: Database = Depends(get_db)):
+async def generate_campaign(
+    campaign_id: str,
+    db: Database = Depends(get_db),
+    user_id: str = Depends(get_current_user)
+):
     enrichment = EnrichmentService()
     generation = GenerationService()
 
     prospects = await db.fetch("""
         SELECT * FROM public.prospects
         WHERE campaign_id = $1 AND user_id = $2
-    """, campaign_id, TEMP_USER_ID)
+    """, campaign_id, user_id)
 
     for p in prospects:
         try:
@@ -238,7 +278,11 @@ async def generate_campaign(campaign_id: str, db: Database = Depends(get_db)):
 # ─────────────────────────────
 
 @app.post("/api/campaigns/{campaign_id}/send")
-async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db)):
+async def send_campaign_emails(
+    campaign_id: str,
+    db: Database = Depends(get_db),
+    user_id: str = Depends(get_current_user)
+):
     try:
         sender = EmailSender()
 
@@ -248,7 +292,7 @@ async def send_campaign_emails(campaign_id: str, db: Database = Depends(get_db))
             AND user_id = $2
             AND generation_status = 'done'
             LIMIT 10
-        """, campaign_id, TEMP_USER_ID)
+        """, campaign_id, user_id)
 
         if not prospects:
             return {"message": "No emails to send", "count": 0}
@@ -310,11 +354,15 @@ async def track_email_open(prospect_id: str, db: Database = Depends(get_db)):
 # ─────────────────────────────
 
 @app.get("/api/campaigns/{campaign_id}/prospects")
-async def get_prospects(campaign_id: str, db: Database = Depends(get_db)):
+async def get_prospects(
+    campaign_id: str,
+    db: Database = Depends(get_db),
+    user_id: str = Depends(get_current_user)
+):
     return await db.fetch("""
         SELECT * FROM public.prospects 
         WHERE campaign_id = $1 AND user_id = $2
-    """, campaign_id, TEMP_USER_ID)
+    """, campaign_id, user_id)
 
 
 # ─────────────────────────────
