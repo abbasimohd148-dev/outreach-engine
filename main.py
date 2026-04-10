@@ -1,6 +1,7 @@
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Header
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, Response
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import Optional
 import uuid
@@ -10,8 +11,6 @@ import os
 import asyncio
 
 from passlib.context import CryptContext
-
-# ✅ JWT
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 
@@ -23,11 +22,11 @@ from utils.db import get_db, Database
 app = FastAPI(title="Outreach Engine API", version="1.0.0")
 
 
-# 🔐 PASSWORD HASHING (FIXED)
+# 🔐 PASSWORD HASHING
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def hash_password(password: str):
-    return pwd_context.hash(password[:72])  # bcrypt limit fix
+    return pwd_context.hash(password[:72])
 
 def verify_password(plain, hashed):
     return pwd_context.verify(plain, hashed)
@@ -38,7 +37,6 @@ SECRET_KEY = "supersecretkey123"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
-
 def create_access_token(data: dict):
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -46,9 +44,12 @@ def create_access_token(data: dict):
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
-async def get_current_user(authorization: str = Header(...)):
+# 🔐 SECURITY (THIS ENABLES AUTHORIZE BUTTON)
+security = HTTPBearer()
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
-        token = authorization.split(" ")[1]
+        token = credentials.credentials
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload["user_id"]
     except:
@@ -125,7 +126,7 @@ async def signup(data: SignupRequest, db: Database = Depends(get_db)):
 
 
 # ─────────────────────────────
-# 🔐 LOGIN (JWT ENABLED)
+# 🔐 LOGIN (JWT)
 # ─────────────────────────────
 
 @app.post("/auth/login")
@@ -158,7 +159,7 @@ async def login(data: LoginRequest, db: Database = Depends(get_db)):
 
 
 # ─────────────────────────────
-# CREATE CAMPAIGN (JWT USER)
+# CREATE CAMPAIGN
 # ─────────────────────────────
 
 class CampaignCreate(BaseModel):
@@ -189,7 +190,7 @@ async def create_campaign(
 
 
 # ─────────────────────────────
-# UPLOAD CSV (JWT USER)
+# UPLOAD CSV
 # ─────────────────────────────
 
 @app.post("/api/campaigns/{campaign_id}/upload")
