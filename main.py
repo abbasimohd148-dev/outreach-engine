@@ -9,10 +9,10 @@ import csv
 import io
 import os
 import asyncio
+import time
 
 from passlib.context import CryptContext
 from jose import JWTError, jwt
-from datetime import datetime, timedelta
 
 from services.enrichment import EnrichmentService
 from services.generation import GenerationService
@@ -26,33 +26,34 @@ app = FastAPI(title="Outreach Engine API", version="1.0.0")
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def hash_password(password: str):
-    return pwd_context.hash(password[:72])
+    return pwd_context.hash(password[:72])  # bcrypt limit fix
 
 def verify_password(plain, hashed):
     return pwd_context.verify(plain, hashed)
 
 
 # 🔐 JWT CONFIG
-SECRET_KEY = "supersecretkey123"
+SECRET_KEY = "supersecretkey123"   # ⚠️ keep same always
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
+ACCESS_TOKEN_EXPIRE_SECONDS = 3600
+
+security = HTTPBearer()
+
 
 def create_access_token(data: dict):
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
+    to_encode["exp"] = int(time.time()) + ACCESS_TOKEN_EXPIRE_SECONDS
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
-# 🔐 SECURITY (THIS ENABLES AUTHORIZE BUTTON)
-security = HTTPBearer()
-
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
     try:
         token = credentials.credentials
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload["user_id"]
-    except:
+    except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
@@ -126,7 +127,7 @@ async def signup(data: SignupRequest, db: Database = Depends(get_db)):
 
 
 # ─────────────────────────────
-# 🔐 LOGIN (JWT)
+# 🔐 LOGIN
 # ─────────────────────────────
 
 @app.post("/auth/login")
@@ -143,7 +144,9 @@ async def login(data: LoginRequest, db: Database = Depends(get_db)):
         if not verify_password(data.password, user["password"]):
             raise HTTPException(status_code=400, detail="Invalid password")
 
-        token = create_access_token({"user_id": str(user["id"])})
+        token = create_access_token({
+            "user_id": str(user["id"])
+        })
 
         return {
             "message": "Login successful",
