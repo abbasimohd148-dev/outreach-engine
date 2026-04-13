@@ -22,7 +22,7 @@ class EmailSender:
             msg = MIMEMultipart("alternative")
             msg["From"] = self.email
             msg["To"] = to_email
-            msg["Subject"] = subject
+            msg["Subject"] = subject or "No Subject"
 
             plain_text = body.replace("<br>", "\n").replace("<br/>", "\n")
 
@@ -40,7 +40,7 @@ class EmailSender:
             print("🔐 Logging in...")
             server.login(self.email, self.password)
 
-            print("📤 Sending email...")
+            print(f"📤 Sending email to {to_email}...")
             server.send_message(msg)
 
             server.quit()
@@ -48,5 +48,5 @@ class EmailSender:
             print(f"✅ Email sent to {to_email}")
 
         except Exception as e:
-            print(f"❌ Email failed: {str(e)}")
+            print(f"❌ Email failed for {to_email}: {str(e)}")
             raise e

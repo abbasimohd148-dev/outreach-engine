@@ -1,70 +1,87 @@
 body {
-  font-family: Arial, sans-serif;
-  background: linear-gradient(to right, #0f172a, #1e3a8a);
-  color: white;
   margin: 0;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+  color: white;
 }
 
+/* Container */
 .container {
   max-width: 900px;
   margin: auto;
-  padding: 20px;
+  padding: 40px 20px;
+  text-align: center;
 }
 
+/* Heading */
 h1 {
-  text-align: center;
-}
-
-.subtitle {
-  text-align: center;
-  color: #94a3b8;
-  margin-bottom: 20px;
-}
-
-.msg {
-  text-align: center;
-  background: #22c55e;
-  padding: 10px;
-  border-radius: 5px;
+  font-size: 32px;
   margin-bottom: 10px;
 }
 
-.card {
-  background: rgba(30, 41, 59, 0.9);
-  padding: 15px;
-  margin: 15px 0;
-  border-radius: 12px;
-  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+.subtitle {
+  opacity: 0.8;
+  margin-bottom: 30px;
 }
 
+/* Cards */
+.card {
+  background: rgba(255, 255, 255, 0.05);
+  padding: 20px;
+  margin: 15px 0;
+  border-radius: 12px;
+  backdrop-filter: blur(10px);
+}
+
+/* Buttons */
 .btn {
+  padding: 10px 18px;
   margin: 5px;
-  padding: 10px 15px;
   border: none;
-  background: #3b82f6;
+  border-radius: 8px;
+  background: #00c6ff;
   color: white;
-  border-radius: 6px;
   cursor: pointer;
-  transition: 0.2s;
+  transition: 0.3s;
 }
 
 .btn:hover {
-  opacity: 0.85;
+  background: #0072ff;
 }
 
-.btn:disabled {
-  background: #64748b;
-  cursor: not-allowed;
+.btn.success {
+  background: #28a745;
 }
 
-.success {
-  background: #22c55e;
+.btn.success:hover {
+  background: #218838;
 }
 
-.secondary {
-  background: #64748b;
+.btn.secondary {
+  background: #6c757d;
 }
 
+.btn.secondary:hover {
+  background: #5a6268;
+}
+
+/* Input */
+input {
+  padding: 10px;
+  margin: 10px;
+  border-radius: 8px;
+  border: none;
+  width: 60%;
+  max-width: 300px;
+}
+
+/* Message */
+.msg {
+  margin: 10px 0;
+  font-weight: bold;
+}
+
+/* Table */
 table {
   width: 100%;
   margin-top: 20px;
@@ -73,21 +90,52 @@ table {
 
 th,
 td {
-  padding: 12px;
-  border-bottom: 1px solid #334155;
+  padding: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+th {
   text-align: left;
 }
 
-tr:hover {
-  background: rgba(255, 255, 255, 0.05);
-}
-
+/* Status */
 .status {
   padding: 5px 10px;
   border-radius: 6px;
-  background: #334155;
+  background: #ffc107;
+  color: black;
 }
 
 .status.sent {
-  background: #22c55e;
+  background: #28a745;
+  color: white;
+}
+
+/* Links */
+a {
+  color: #00c6ff;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+.loader {
+  text-align: center;
+  font-size: 18px;
+  margin: 15px;
+}
+.stats {
+  display: flex;
+  gap: 15px;
+  margin: 20px 0;
+}
+
+.stat-card {
+  flex: 1;
+  background: rgba(255,255,255,0.1);
+  padding: 15px;
+  border-radius: 10px;
+  text-align: center;
+  font-weight: bold;
 }
