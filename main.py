@@ -14,13 +14,16 @@ import time
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 
+from services.enrichment import EnrichmentService
+from services.generation import GenerationService
 from services.email_sender import EmailSender
 from utils.db import get_db, Database
 
 app = FastAPI(title="Outreach Engine API", version="1.0.0")
 
+
 # ==========================
-# 🔐 AUTH
+# 🔐 AUTH SETUP
 # ==========================
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -31,16 +34,19 @@ def hash_password(password: str):
 def verify_password(plain, hashed):
     return pwd_context.verify(plain, hashed)
 
+
 SECRET_KEY = "supersecretkey123"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_SECONDS = 3600
 
 security = HTTPBearer()
 
+
 def create_access_token(data: dict):
     to_encode = data.copy()
     to_encode["exp"] = int(time.time()) + ACCESS_TOKEN_EXPIRE_SECONDS
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security)
@@ -52,17 +58,20 @@ async def get_current_user(
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
+
 # ==========================
-# ROOT
+# ROOT & HEALTH
 # ==========================
 
 @app.get("/")
 def root():
     return RedirectResponse(url="/docs")
 
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
 
 # ==========================
 # CORS
@@ -76,6 +85,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # ==========================
 # AUTH ROUTES
 # ==========================
@@ -84,9 +94,11 @@ class SignupRequest(BaseModel):
     email: str
     password: str
 
+
 class LoginRequest(BaseModel):
     email: str
     password: str
+
 
 @app.post("/auth/signup")
 async def signup(data: SignupRequest, db: Database = Depends(get_db)):
@@ -99,13 +111,15 @@ async def signup(data: SignupRequest, db: Database = Depends(get_db)):
         raise HTTPException(status_code=400, detail="User already exists")
 
     user_id = str(uuid.uuid4())
+    hashed_password = hash_password(data.password)
 
     await db.execute("""
         INSERT INTO public.users (id, email, password)
         VALUES ($1, $2, $3)
-    """, user_id, data.email, hash_password(data.password))
+    """, user_id, data.email, hashed_password)
 
     return {"user_id": user_id}
+
 
 @app.post("/auth/login")
 async def login(data: LoginRequest, db: Database = Depends(get_db)):
@@ -122,7 +136,11 @@ async def login(data: LoginRequest, db: Database = Depends(get_db)):
 
     token = create_access_token({"user_id": str(user["id"])})
 
-    return {"access_token": token, "user_id": user["id"]}
+    return {
+        "access_token": token,
+        "user_id": user["id"]
+    }
+
 
 # ==========================
 # CREATE CAMPAIGN
@@ -130,6 +148,9 @@ async def login(data: LoginRequest, db: Database = Depends(get_db)):
 
 class CampaignCreate(BaseModel):
     name: str
+    tone: str = "professional"
+    offer_override: Optional[str] = None
+
 
 @app.post("/api/campaigns")
 async def create_campaign(
@@ -140,11 +161,13 @@ async def create_campaign(
     campaign_id = str(uuid.uuid4())
 
     await db.execute("""
-        INSERT INTO public.campaigns (id, user_id, name, status)
-        VALUES ($1, $2, $3, 'pending')
-    """, campaign_id, user_id, data.name)
+        INSERT INTO public.campaigns 
+        (id, user_id, name, status, tone, offer_override)
+        VALUES ($1, $2, $3, 'pending', $4, $5)
+    """, campaign_id, user_id, data.name, data.tone, data.offer_override)
 
     return {"id": campaign_id}
+
 
 # ==========================
 # UPLOAD CSV
@@ -158,7 +181,9 @@ async def upload_prospects(
     user_id: str = Depends(get_current_user)
 ):
     content = await file.read()
-    reader = csv.DictReader(io.StringIO(content.decode("utf-8")))
+    decoded = content.decode("utf-8")
+
+    reader = csv.DictReader(io.StringIO(decoded))
 
     count = 0
 
@@ -179,8 +204,9 @@ async def upload_prospects(
 
     return {"count": count}
 
+
 # ==========================
-# 🚨 GENERATE (FORCED FIX)
+# GENERATE EMAILS
 # ==========================
 
 @app.post("/api/campaigns/{campaign_id}/generate")
@@ -189,30 +215,49 @@ async def generate_campaign(
     db: Database = Depends(get_db),
     user_id: str = Depends(get_current_user)
 ):
+    enrichment = EnrichmentService()
+    generation = GenerationService()
+
     prospects = await db.fetch("""
         SELECT * FROM public.prospects
         WHERE campaign_id = $1 AND user_id = $2
     """, campaign_id, user_id)
 
     for p in prospects:
-        await db.execute("""
-            UPDATE public.prospects SET
-                personalized_first_line = $1,
-                subject_line = $2,
-                email_body = $3,
-                generation_status = 'done'
-            WHERE id = $4
-        """,
-            "Hi there,",
-            "Quick question",
-            f"Hi {p.get('first_name')}, I wanted to reach out.",
-            p["id"]
-        )
+        try:
+            data = await enrichment.enrich(p)
+
+            copy = generation.generate(
+                p,
+                data,
+                "We help businesses scale outreach using AI."
+            )
+
+            subject = copy.get("subject") or "Quick question"
+            body = copy.get("body") or f"Hi {p.get('first_name', '')}, just reaching out."
+
+            await db.execute("""
+                UPDATE public.prospects SET
+                    personalized_first_line = $1,
+                    subject_line = $2,
+                    email_body = $3,
+                    generation_status = 'done'
+                WHERE id = $4
+            """,
+                copy.get("first_line", "") or "Hi there,",
+                subject,
+                body,
+                p["id"]
+            )
+
+        except Exception as e:
+            print("❌ GENERATION ERROR:", e)
 
     return {"message": "Generated"}
 
+
 # ==========================
-# SEND EMAILS
+# SEND EMAILS (DEBUG FIXED)
 # ==========================
 
 @app.post("/api/campaigns/{campaign_id}/send")
@@ -228,30 +273,79 @@ async def send_campaign_emails(
         WHERE campaign_id = $1
         AND user_id = $2
         AND generation_status = 'done'
+        LIMIT 10
     """, campaign_id, user_id)
 
     if not prospects:
         return {"message": "No emails to send", "count": 0}
 
-    sent = 0
+    BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
+
+    sent_count = 0
 
     for p in prospects:
-        await asyncio.to_thread(
-            sender.send_email,
-            p["email"],
-            p["subject_line"],
-            p["email_body"]
-        )
+        try:
+            print("------ DEBUG ------")
+            print("Email:", p["email"])
+            print("Body exists:", bool(p["email_body"]))
 
-        await db.execute("""
-            UPDATE public.prospects
-            SET generation_status = 'sent'
-            WHERE id = $1
-        """, p["id"])
+            if not p["email_body"]:
+                continue
 
-        sent += 1
+            subject = p["subject_line"] or "Quick question"
 
-    return {"count": sent}
+            body = f"""
+<p>{p["personalized_first_line"] or ""}</p>
+<p>{p["email_body"] or ""}</p>
+"""
+
+            tracking_pixel = f'<img src="{BASE_URL}/track/{p["id"]}" width="1" height="1" />'
+            full_body = body + tracking_pixel
+
+            result = await asyncio.to_thread(
+                sender.send_email,
+                p["email"],
+                subject,
+                full_body
+            )
+
+            print("SEND RESULT:", result)
+
+            if not result:
+                print("⚠️ Skipping failed email")
+                continue
+
+            sent_count += 1
+
+            await db.execute("""
+                UPDATE public.prospects
+                SET generation_status = 'sent'
+                WHERE id = $1
+            """, p["id"])
+
+        except Exception as e:
+            print("❌ FULL ERROR:", str(e))
+            return {"error": str(e)}
+
+    return {"message": "Emails processed", "count": sent_count}
+
+
+# ==========================
+# TRACK OPEN
+# ==========================
+
+@app.get("/track/{prospect_id}")
+async def track_email_open(prospect_id: str, db: Database = Depends(get_db)):
+    await db.execute("""
+        UPDATE public.prospects
+        SET opened = TRUE
+        WHERE id = $1
+    """, prospect_id)
+
+    pixel = b'GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;'
+
+    return Response(content=pixel, media_type="image/gif")
+
 
 # ==========================
 # VIEW PROSPECTS
@@ -267,3 +361,16 @@ async def get_prospects(
         SELECT * FROM public.prospects 
         WHERE campaign_id = $1 AND user_id = $2
     """, campaign_id, user_id)
+
+
+# ==========================
+# FIX DB
+# ==========================
+
+@app.get("/api/fix-db")
+async def fix_db(db: Database = Depends(get_db)):
+    await db.execute("""
+        ALTER TABLE public.prospects 
+        ADD COLUMN IF NOT EXISTS opened BOOLEAN DEFAULT FALSE;
+    """)
+    return {"message": "DB fixed"}
