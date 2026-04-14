@@ -14,8 +14,6 @@ import time
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 
-from services.enrichment import EnrichmentService
-from services.generation import GenerationService
 from services.email_sender import EmailSender
 from utils.db import get_db, Database
 
@@ -148,8 +146,6 @@ async def login(data: LoginRequest, db: Database = Depends(get_db)):
 
 class CampaignCreate(BaseModel):
     name: str
-    tone: str = "professional"
-    offer_override: Optional[str] = None
 
 
 @app.post("/api/campaigns")
@@ -162,9 +158,9 @@ async def create_campaign(
 
     await db.execute("""
         INSERT INTO public.campaigns 
-        (id, user_id, name, status, tone, offer_override)
-        VALUES ($1, $2, $3, 'pending', $4, $5)
-    """, campaign_id, user_id, data.name, data.tone, data.offer_override)
+        (id, user_id, name, status)
+        VALUES ($1, $2, $3, 'pending')
+    """, campaign_id, user_id, data.name)
 
     return {"id": campaign_id}
 
@@ -206,7 +202,7 @@ async def upload_prospects(
 
 
 # ==========================
-# GENERATE EMAILS
+# 🔥 GENERATE EMAILS (FORCED WORKING)
 # ==========================
 
 @app.post("/api/campaigns/{campaign_id}/generate")
@@ -215,9 +211,6 @@ async def generate_campaign(
     db: Database = Depends(get_db),
     user_id: str = Depends(get_current_user)
 ):
-    enrichment = EnrichmentService()
-    generation = GenerationService()
-
     prospects = await db.fetch("""
         SELECT * FROM public.prospects
         WHERE campaign_id = $1 AND user_id = $2
@@ -225,16 +218,10 @@ async def generate_campaign(
 
     for p in prospects:
         try:
-            data = await enrichment.enrich(p)
+            print("🔥 GENERATING:", p["email"])
 
-            copy = generation.generate(
-                p,
-                data,
-                "We help businesses scale outreach using AI."
-            )
-
-            subject = copy.get("subject") or "Quick question"
-            body = copy.get("body") or f"Hi {p.get('first_name', '')}, just reaching out."
+            subject = "Quick question"
+            body = f"Hi {p.get('first_name')}, I wanted to reach out regarding your business."
 
             await db.execute("""
                 UPDATE public.prospects SET
@@ -244,20 +231,23 @@ async def generate_campaign(
                     generation_status = 'done'
                 WHERE id = $4
             """,
-                copy.get("first_line", "") or "Hi there,",
+                "Hi there,",
                 subject,
                 body,
                 p["id"]
             )
 
+            print("✅ UPDATED:", p["id"])
+
         except Exception as e:
-            print("❌ GENERATION ERROR:", e)
+            print("❌ ERROR:", str(e))
+            return {"error": str(e)}
 
     return {"message": "Generated"}
 
 
 # ==========================
-# SEND EMAILS (DEBUG FIXED)
+# SEND EMAILS
 # ==========================
 
 @app.post("/api/campaigns/{campaign_id}/send")
@@ -273,22 +263,15 @@ async def send_campaign_emails(
         WHERE campaign_id = $1
         AND user_id = $2
         AND generation_status = 'done'
-        LIMIT 10
     """, campaign_id, user_id)
 
     if not prospects:
         return {"message": "No emails to send", "count": 0}
 
-    BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
-
     sent_count = 0
 
     for p in prospects:
         try:
-            print("------ DEBUG ------")
-            print("Email:", p["email"])
-            print("Body exists:", bool(p["email_body"]))
-
             if not p["email_body"]:
                 continue
 
@@ -299,20 +282,14 @@ async def send_campaign_emails(
 <p>{p["email_body"] or ""}</p>
 """
 
-            tracking_pixel = f'<img src="{BASE_URL}/track/{p["id"]}" width="1" height="1" />'
-            full_body = body + tracking_pixel
-
             result = await asyncio.to_thread(
                 sender.send_email,
                 p["email"],
                 subject,
-                full_body
+                body
             )
 
-            print("SEND RESULT:", result)
-
             if not result:
-                print("⚠️ Skipping failed email")
                 continue
 
             sent_count += 1
@@ -324,27 +301,10 @@ async def send_campaign_emails(
             """, p["id"])
 
         except Exception as e:
-            print("❌ FULL ERROR:", str(e))
+            print("❌ SEND ERROR:", str(e))
             return {"error": str(e)}
 
     return {"message": "Emails processed", "count": sent_count}
-
-
-# ==========================
-# TRACK OPEN
-# ==========================
-
-@app.get("/track/{prospect_id}")
-async def track_email_open(prospect_id: str, db: Database = Depends(get_db)):
-    await db.execute("""
-        UPDATE public.prospects
-        SET opened = TRUE
-        WHERE id = $1
-    """, prospect_id)
-
-    pixel = b'GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;'
-
-    return Response(content=pixel, media_type="image/gif")
 
 
 # ==========================
@@ -361,16 +321,3 @@ async def get_prospects(
         SELECT * FROM public.prospects 
         WHERE campaign_id = $1 AND user_id = $2
     """, campaign_id, user_id)
-
-
-# ==========================
-# FIX DB
-# ==========================
-
-@app.get("/api/fix-db")
-async def fix_db(db: Database = Depends(get_db)):
-    await db.execute("""
-        ALTER TABLE public.prospects 
-        ADD COLUMN IF NOT EXISTS opened BOOLEAN DEFAULT FALSE;
-    """)
-    return {"message": "DB fixed"}
