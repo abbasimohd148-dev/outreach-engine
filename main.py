@@ -22,7 +22,10 @@ from utils.db import get_db, Database
 app = FastAPI(title="Outreach Engine API", version="1.0.0")
 
 
-# 🔐 PASSWORD HASHING
+# ==========================
+# 🔐 AUTH SETUP
+# ==========================
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def hash_password(password: str):
@@ -32,7 +35,6 @@ def verify_password(plain, hashed):
     return pwd_context.verify(plain, hashed)
 
 
-# 🔐 JWT CONFIG
 SECRET_KEY = "supersecretkey123"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_SECONDS = 3600
@@ -57,18 +59,23 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
-# ✅ ROOT
+# ==========================
+# ROOT & HEALTH
+# ==========================
+
 @app.get("/")
 def root():
     return RedirectResponse(url="/docs")
-
 
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
 
-# ✅ CORS
+# ==========================
+# CORS
+# ==========================
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -79,7 +86,7 @@ app.add_middleware(
 
 
 # ==========================
-# AUTH
+# AUTH ROUTES
 # ==========================
 
 class SignupRequest(BaseModel):
@@ -198,7 +205,7 @@ async def upload_prospects(
 
 
 # ==========================
-# GENERATE EMAILS
+# GENERATE EMAILS (FIXED)
 # ==========================
 
 @app.post("/api/campaigns/{campaign_id}/generate")
@@ -225,6 +232,11 @@ async def generate_campaign(
                 "We help businesses scale outreach using AI."
             )
 
+            print("DEBUG COPY:", copy)
+
+            subject = copy.get("subject") or "Quick question"
+            body = copy.get("body") or "Hello, just reaching out."
+
             await db.execute("""
                 UPDATE public.prospects SET
                     personalized_first_line = $1,
@@ -234,8 +246,8 @@ async def generate_campaign(
                 WHERE id = $4
             """,
                 copy.get("first_line", ""),
-                copy.get("subject", ""),
-                copy.get("body", ""),
+                subject,
+                body,
                 p["id"]
             )
 
@@ -277,6 +289,7 @@ async def send_campaign_emails(
             print("------ DEBUG ------")
             print("Email:", p["email"])
             print("Status:", p["generation_status"])
+            print("Body exists:", bool(p["email_body"]))
 
             if not p["email_body"]:
                 continue
@@ -324,7 +337,7 @@ async def track_email_open(prospect_id: str, db: Database = Depends(get_db)):
         WHERE id = $1
     """, prospect_id)
 
-    pixel = b'\x47\x49\x46\x38\x39\x61\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;'
+    pixel = b'GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;'
 
     return Response(content=pixel, media_type="image/gif")
 
