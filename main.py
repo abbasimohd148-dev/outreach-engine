@@ -205,7 +205,7 @@ async def upload_prospects(
 
 
 # ==========================
-# GENERATE EMAILS (FIXED)
+# GENERATE EMAILS (FINAL FIX)
 # ==========================
 
 @app.post("/api/campaigns/{campaign_id}/generate")
@@ -224,6 +224,8 @@ async def generate_campaign(
 
     for p in prospects:
         try:
+            print("🔥 PROCESSING:", p["email"])
+
             data = await enrichment.enrich(p)
 
             copy = generation.generate(
@@ -234,8 +236,9 @@ async def generate_campaign(
 
             print("DEBUG COPY:", copy)
 
+            # ✅ SAFE FALLBACKS (CRITICAL FIX)
             subject = copy.get("subject") or "Quick question"
-            body = copy.get("body") or "Hello, just reaching out."
+            body = copy.get("body") or f"Hi {p.get('first_name') or ''}, just reaching out."
 
             await db.execute("""
                 UPDATE public.prospects SET
@@ -245,11 +248,13 @@ async def generate_campaign(
                     generation_status = 'done'
                 WHERE id = $4
             """,
-                copy.get("first_line", ""),
+                copy.get("first_line") or "Hi there,",
                 subject,
                 body,
                 p["id"]
             )
+
+            print("✅ UPDATED:", p["id"])
 
         except Exception as e:
             print("❌ GENERATION ERROR:", e)
@@ -258,7 +263,7 @@ async def generate_campaign(
 
 
 # ==========================
-# SEND EMAILS (FIXED)
+# SEND EMAILS
 # ==========================
 
 @app.post("/api/campaigns/{campaign_id}/send")
@@ -273,7 +278,7 @@ async def send_campaign_emails(
         SELECT * FROM public.prospects
         WHERE campaign_id = $1
         AND user_id = $2
-        AND (generation_status = 'done' OR generation_status = 'sent')
+        AND generation_status = 'done'
         LIMIT 10
     """, campaign_id, user_id)
 
@@ -286,11 +291,6 @@ async def send_campaign_emails(
 
     for p in prospects:
         try:
-            print("------ DEBUG ------")
-            print("Email:", p["email"])
-            print("Status:", p["generation_status"])
-            print("Body exists:", bool(p["email_body"]))
-
             if not p["email_body"]:
                 continue
 
