@@ -6,31 +6,31 @@ class EmailSender:
     def __init__(self):
         self.api_key = os.getenv("RESEND_API_KEY")
 
-    def send_email(self, to_email, subject, html):
+    def send_email(self, to_email, subject, body):
         try:
             if not self.api_key:
-                print("❌ Missing RESEND_API_KEY")
-                return False
+                raise Exception("❌ RESEND_API_KEY missing")
 
-            url = "https://api.resend.com/emails"
+            response = requests.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "from": "onboarding@resend.dev",  # default working sender
+                    "to": [to_email],
+                    "subject": subject,
+                    "html": body
+                }
+            )
 
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
+            print("📨 RESEND RESPONSE:", response.text)
 
-            payload = {
-                "from": "onboarding@resend.dev",
-                "to": [to_email],
-                "subject": subject,
-                "html": html
-            }
+            if response.status_code != 200:
+                raise Exception(f"Email failed: {response.text}")
 
-            response = requests.post(url, headers=headers, json=payload)
-
-            print("📨 RESEND:", response.status_code, response.text)
-
-            return response.status_code in [200, 201]
+            return True
 
         except Exception as e:
             print("❌ EMAIL ERROR:", str(e))
