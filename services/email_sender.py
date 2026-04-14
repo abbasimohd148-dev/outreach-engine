@@ -1,49 +1,40 @@
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import requests
 import os
 
 
 class EmailSender:
     def __init__(self):
-        self.smtp_server = "smtp.gmail.com"
-        self.smtp_port = 587
-        self.email = os.getenv("EMAIL_USER")
-        self.password = os.getenv("EMAIL_PASS")
+        self.api_key = os.getenv("RESEND_API_KEY")
 
-        print("📧 EMAIL_USER:", self.email)
-        print("🔑 EMAIL_PASS exists:", bool(self.password))
+        print("🔑 RESEND KEY exists:", bool(self.api_key))
 
-    def send_email(self, to_email, subject, body):
+        if not self.api_key:
+            raise Exception("❌ RESEND_API_KEY missing")
+
+    def send_email(self, to_email, subject, html):
         try:
-            if not self.email or not self.password:
-                raise Exception("❌ EMAIL_USER or EMAIL_PASS missing")
+            url = "https://api.resend.com/emails"
 
-            msg = MIMEMultipart("alternative")
-            msg["From"] = self.email
-            msg["To"] = to_email
-            msg["Subject"] = subject or "No Subject"
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
 
-            plain_text = body.replace("<br>", "\n").replace("<br/>", "\n")
+            payload = {
+                "from": "onboarding@resend.dev",  # test sender
+                "to": [to_email],
+                "subject": subject or "Quick question",
+                "html": html or "<p>Hello</p>"
+            }
 
-            part1 = MIMEText(plain_text, "plain")
-            part2 = MIMEText(body, "html")
+            print(f"📤 Sending email to {to_email} via Resend...")
 
-            msg.attach(part1)
-            msg.attach(part2)
+            response = requests.post(url, headers=headers, json=payload)
 
-            print("🚀 Connecting to SMTP...")
+            print("📨 RESEND RESPONSE:", response.status_code, response.text)
 
-            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
-            server.starttls()
-
-            print("🔐 Logging in...")
-            server.login(self.email, self.password)
-
-            print(f"📤 Sending email to {to_email}...")
-            server.send_message(msg)
-
-            server.quit()
+            if response.status_code not in [200, 201]:
+                raise Exception(f"Email failed: {response.text}")
 
             print(f"✅ Email sent to {to_email}")
 
