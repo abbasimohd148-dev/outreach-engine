@@ -19,7 +19,6 @@ from utils.db import get_db, Database
 
 app = FastAPI(title="Outreach Engine API", version="1.0.0")
 
-
 # ==========================
 # 🔐 AUTH SETUP
 # ==========================
@@ -32,19 +31,16 @@ def hash_password(password: str):
 def verify_password(plain, hashed):
     return pwd_context.verify(plain, hashed)
 
-
 SECRET_KEY = "supersecretkey123"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_SECONDS = 3600
 
 security = HTTPBearer()
 
-
 def create_access_token(data: dict):
     to_encode = data.copy()
     to_encode["exp"] = int(time.time()) + ACCESS_TOKEN_EXPIRE_SECONDS
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security)
@@ -56,7 +52,6 @@ async def get_current_user(
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-
 # ==========================
 # ROOT & HEALTH
 # ==========================
@@ -65,11 +60,9 @@ async def get_current_user(
 def root():
     return RedirectResponse(url="/docs")
 
-
 @app.get("/health")
 async def health():
     return {"status": "ok"}
-
 
 # ==========================
 # CORS
@@ -83,7 +76,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # ==========================
 # AUTH ROUTES
 # ==========================
@@ -92,11 +84,9 @@ class SignupRequest(BaseModel):
     email: str
     password: str
 
-
 class LoginRequest(BaseModel):
     email: str
     password: str
-
 
 @app.post("/auth/signup")
 async def signup(data: SignupRequest, db: Database = Depends(get_db)):
@@ -118,7 +108,6 @@ async def signup(data: SignupRequest, db: Database = Depends(get_db)):
 
     return {"user_id": user_id}
 
-
 @app.post("/auth/login")
 async def login(data: LoginRequest, db: Database = Depends(get_db)):
     user = await db.fetchrow(
@@ -139,14 +128,14 @@ async def login(data: LoginRequest, db: Database = Depends(get_db)):
         "user_id": user["id"]
     }
 
-
 # ==========================
 # CREATE CAMPAIGN
 # ==========================
 
 class CampaignCreate(BaseModel):
     name: str
-
+    tone: str = "professional"
+    offer_override: Optional[str] = None
 
 @app.post("/api/campaigns")
 async def create_campaign(
@@ -158,12 +147,11 @@ async def create_campaign(
 
     await db.execute("""
         INSERT INTO public.campaigns 
-        (id, user_id, name, status)
-        VALUES ($1, $2, $3, 'pending')
-    """, campaign_id, user_id, data.name)
+        (id, user_id, name, status, tone, offer_override)
+        VALUES ($1, $2, $3, 'pending', $4, $5)
+    """, campaign_id, user_id, data.name, data.tone, data.offer_override)
 
     return {"id": campaign_id}
-
 
 # ==========================
 # UPLOAD CSV
@@ -200,9 +188,8 @@ async def upload_prospects(
 
     return {"count": count}
 
-
 # ==========================
-# 🔥 GENERATE EMAILS (FORCED WORKING)
+# GENERATE (SIMPLE WORKING)
 # ==========================
 
 @app.post("/api/campaigns/{campaign_id}/generate")
@@ -237,17 +224,13 @@ async def generate_campaign(
                 p["id"]
             )
 
-            print("✅ UPDATED:", p["id"])
-
         except Exception as e:
-            print("❌ ERROR:", str(e))
-            return {"error": str(e)}
+            print("❌ GENERATION ERROR:", str(e))
 
     return {"message": "Generated"}
 
-
 # ==========================
-# SEND EMAILS
+# SEND EMAILS (FIXED 🔥)
 # ==========================
 
 @app.post("/api/campaigns/{campaign_id}/send")
@@ -256,24 +239,30 @@ async def send_campaign_emails(
     db: Database = Depends(get_db),
     user_id: str = Depends(get_current_user)
 ):
+    print("🚀 NEW SEND LOGIC RUNNING")
+
     sender = EmailSender()
 
     prospects = await db.fetch("""
         SELECT * FROM public.prospects
         WHERE campaign_id = $1
         AND user_id = $2
-        AND generation_status = 'done'
+        AND email_body IS NOT NULL
     """, campaign_id, user_id)
+
+    print("TOTAL PROSPECTS:", len(prospects))
 
     if not prospects:
         return {"message": "No emails to send", "count": 0}
+
+    BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 
     sent_count = 0
 
     for p in prospects:
         try:
-            if not p["email_body"]:
-                continue
+            print("------ DEBUG ------")
+            print("Email:", p["email"])
 
             subject = p["subject_line"] or "Quick question"
 
@@ -282,15 +271,15 @@ async def send_campaign_emails(
 <p>{p["email_body"] or ""}</p>
 """
 
-            result = await asyncio.to_thread(
+            tracking_pixel = f'<img src="{BASE_URL}/track/{p["id"]}" width="1" height="1" />'
+            full_body = body + tracking_pixel
+
+            await asyncio.to_thread(
                 sender.send_email,
                 p["email"],
                 subject,
-                body
+                full_body
             )
-
-            if not result:
-                continue
 
             sent_count += 1
 
@@ -301,23 +290,23 @@ async def send_campaign_emails(
             """, p["id"])
 
         except Exception as e:
-            print("❌ SEND ERROR:", str(e))
+            print("❌ FULL ERROR:", str(e))
             return {"error": str(e)}
 
     return {"message": "Emails processed", "count": sent_count}
 
-
 # ==========================
-# VIEW PROSPECTS
+# TRACK OPEN
 # ==========================
 
-@app.get("/api/campaigns/{campaign_id}/prospects")
-async def get_prospects(
-    campaign_id: str,
-    db: Database = Depends(get_db),
-    user_id: str = Depends(get_current_user)
-):
-    return await db.fetch("""
-        SELECT * FROM public.prospects 
-        WHERE campaign_id = $1 AND user_id = $2
-    """, campaign_id, user_id)
+@app.get("/track/{prospect_id}")
+async def track_email_open(prospect_id: str, db: Database = Depends(get_db)):
+    await db.execute("""
+        UPDATE public.prospects
+        SET opened = TRUE
+        WHERE id = $1
+    """, prospect_id)
+
+    pixel = b'GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;'
+
+    return Response(content=pixel, media_type="image/gif")
